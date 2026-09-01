@@ -29,7 +29,7 @@ from setup_engine import build_setups
 from sr_engine import build_zones
 from technical_engine import build_technical_snapshot
 
-st.set_page_config(page_title="Stock Analyzer V6.0.21", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Stock Analyzer V6.0.22", page_icon="📈", layout="wide")
 
 DB_FILE = Path(os.getenv("ANALYZER_DB_FILE", ".data/stock_analyzer_v6.sqlite"))
 HISTORY = SQLiteHistoryStore(DB_FILE)
@@ -1015,7 +1015,13 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
         r3.metric("참고 수량", f"{shares:,}주", "현금 한도로 축소됨" if capped_by_cash else None)
         r4.metric("투입 금액", _money_cur(position_value, is_kr), f"계좌의 {position_pct:.1f}% · 잔여 현금 {_money_cur(cash_left, is_kr)}")
 
-        if position_pct >= 70:
+        if shares == 0 and shares_by_risk == 0:
+            st.warning(
+                f"허용 손실 {_money_cur(adj_risk_amount, is_kr)}로는 주당 손절 리스크 {_money_cur(risk_per_share, is_kr)}짜리 1주도 살 수 없어 **참고 수량이 0주**로 나왔습니다. "
+                f"이 종목의 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 넓은 편이라 생기는, 계산상 정상적인 결과입니다(오류 아님). "
+                "계좌 규모를 늘리거나 손실 허용 비율을 높이면 1주부터 계산되기 시작하고, 반대로 이 손절 거리 자체가 부담스럽다면 이 셋업은 지금 비중 관리 기준으로는 맞지 않는 것으로 볼 수 있습니다."
+            )
+        elif position_pct >= 70:
             st.warning(
                 f"투입 금액이 계좌의 {position_pct:.0f}%로 큽니다. 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 좁다 보니, "
                 "적은 손실 허용 비율로도 많은 수량 계산이 나온 것뿐이에요. **'손실 허용 비율'과 '투입 비중'은 다른 개념**입니다 — "
@@ -1024,7 +1030,7 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
             )
         if capped_by_cash:
             st.info(
-                f"손실 허용 비율 기준으로는 {shares_by_risk:,}주가 필요하지만, 입력한 계좈 규모로는 최대 {max_affordable_shares:,}주까지만 살 수 있어 그만큼으로 제한했습니다. "
+                f"손실 허용 비율 기준으로는 {shares_by_risk:,}주가 필요하지만, 입력한 계좌 규모로는 최대 {max_affordable_shares:,}주까지만 살 수 있어 그만큼으로 제한했습니다. "
                 f"이 경우 실제 손절 시 손실은 목표보다 작은 {_money_cur(actual_risk_amount, is_kr)}(계좌의 {actual_risk_pct:.1f}%)입니다."
             )
         if multiplier_active:
@@ -1917,6 +1923,80 @@ def render_stock_heatmap(is_us: bool):
         render_treemap(names, tickers, key="stock_heatmap_kr", height=300)
 
 
+def _safe_float(x) -> float | None:
+    try:
+        v = float(str(x).replace(",", "").replace("%", "").strip())
+        return v if np.isfinite(v) else None
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def nasdaq100_marketcap_data() -> pd.DataFrame:
+    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json, text/plain, */*", "Referer": "https://www.nasdaq.com/"}
+    try:
+        payload = requests.get("https://api.nasdaq.com/api/quote/list-type/nasdaq100", headers=headers, timeout=20).json()
+        rows = payload["data"]["data"]["rows"]
+        out = []
+        for r in rows:
+            symbol = str(r.get("symbol", "")).strip().replace(".", "-")
+            if not symbol:
+                continue
+            out.append({
+                "Symbol": symbol,
+                "Name": r.get("companyName", symbol),
+                "MarketCap": _safe_float(r.get("marketCap")),
+                "Change": _safe_float(r.get("percentageChange") or r.get("pctChange")),
+            })
+        return pd.DataFrame(out)
+    except Exception:
+        return pd.DataFrame()
+
+
+def render_nasdaq100_marketcap_map():
+    st.markdown("<div class='v6-kicker' style='margin:16px 0 4px'>📐 나스닥100 시가총액 맵 · Market-Cap Weighted</div>", unsafe_allow_html=True)
+    st.caption(
+        "나스닥100 전체 구성종목을 시가총액 비중대로 타일 크기를 배분한 지도입니다(대형주일수록 큰 타일). "
+        "100종목을 한 번에 불러오는 화면이라 자동으로 불러오지 않고, 버튼을 눌러야 로딩됩니다."
+    )
+    if st.button("나스닥100 맵 불러오기 / 갱신", key="load_nasdaq100_map"):
+        st.session_state["nasdaq100_map_loaded"] = True
+    if not st.session_state.get("nasdaq100_map_loaded"):
+        return
+    with st.spinner("나스닥100 시가총액 데이터를 불러오는 중입니다..."):
+        df = nasdaq100_marketcap_data()
+    if df.empty:
+        st.info("나스닥100 데이터를 일시적으로 가져오지 못했습니다. 위 개별 종목 히트맵을 대신 참고해 주세요.")
+        return
+    mask = df["Change"].isna()
+    if mask.any():
+        need = df.loc[mask, "Symbol"].tolist()
+        fetched = dict(zip(need, _pct_changes(need)))
+        df.loc[mask, "Change"] = df.loc[mask, "Symbol"].map(fetched)
+    df["Change"] = df["Change"].fillna(0.0)
+    missing_mcap = int(df["MarketCap"].isna().sum())
+    size_note = ""
+    if missing_mcap > len(df) * 0.3:
+        df["MarketCap"] = df["MarketCap"].fillna(df["Change"].abs().clip(lower=0.3))
+        size_note = " · 일부 종목은 시가총액을 확보하지 못해 변동폭 기준 크기로 대체했습니다"
+    else:
+        df["MarketCap"] = df["MarketCap"].fillna(df["MarketCap"].median() if df["MarketCap"].notna().any() else 1.0)
+    try:
+        fig = go.Figure(go.Treemap(
+            labels=[f"{s}<br>{c:+.2f}%" for s, c in zip(df.Symbol, df.Change)],
+            parents=[""] * len(df),
+            values=df.MarketCap.clip(lower=0.01),
+            marker=dict(colors=df.Change, colorscale=[[0, "#7f1d3a"], [0.5, "#16232f"], [1, "#0f6b4a"]], cmid=0, showscale=False, line=dict(width=1, color="#07111f")),
+            textinfo="label", textfont=dict(size=11, color="#f8fafc"),
+        ))
+        fig.update_layout(margin=dict(l=4, r=4, t=4, b=4), height=560, paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key="nasdaq100_marketcap_map")
+        st.markdown(HEATMAP_LEGEND, unsafe_allow_html=True)
+        st.caption(f"{len(df)}개 종목 표시됨{size_note} · 나스닥 공개 API 기준으로 실시간과 다소 지연이 있을 수 있습니다.")
+    except Exception:
+        st.info("맵을 그리는 중 문제가 발생했습니다.")
+
+
 def render_fear_greed(market) -> None:
     st.markdown("<div class='v6-kicker' style='margin:6px 0 12px'>😨 공포·탐욕 게이지 · Fear &amp; Greed</div>", unsafe_allow_html=True)
     score = float(market.score)
@@ -2014,6 +2094,10 @@ def render_market_dashboard():
 
     st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
     render_stock_heatmap(is_us)
+
+    if is_us:
+        st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
+        render_nasdaq100_marketcap_map()
 
     st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
     render_macro_risk_chart(is_us)
@@ -2725,7 +2809,7 @@ def render_calibration(a: dict, symbol: str):
 
 # -------------------- App shell --------------------
 st.title("Stock Analyzer by Kijungnam")
-st.caption("V6.0.21 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
+st.caption("V6.0.22 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
 
 with st.expander("🔥 V6 종목 스캐너 · 시장 전체 후보 찾기", expanded=False):
     render_scanner_section()
