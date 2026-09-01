@@ -24,12 +24,12 @@ from market_regime import build_market_regime, market_for_symbol
 from opportunity_engine import build_opportunity
 from quant_engine import build_quant_snapshot, financial_rows
 from risk_engine import build_risk_snapshot
-from scanner_engine import FALLBACK_KOSPI, FALLBACK_NASDAQ, scan_market, top_views
+from scanner_engine import FALLBACK_KOSPI, scan_market, top_views
 from setup_engine import build_setups
 from sr_engine import build_zones
 from technical_engine import build_technical_snapshot
 
-st.set_page_config(page_title="Stock Analyzer V6.0.17", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Stock Analyzer V6.0.21", page_icon="📈", layout="wide")
 
 DB_FILE = Path(os.getenv("ANALYZER_DB_FILE", ".data/stock_analyzer_v6.sqlite"))
 HISTORY = SQLiteHistoryStore(DB_FILE)
@@ -84,6 +84,16 @@ KR_SECTOR_HEATMAP = {
     "통신 (SK텔레콤)": "017670.KS",
 }
 MACRO_RISK_SERIES = [("VIX", "^VIX", "#fb7185"), ("WTI 원유", "CL=F", "#fbbf24"), ("금", "GC=F", "#facc15"), ("달러인덱스(DXY)", "DX-Y.NYB", "#60a5fa")]
+
+US_STOCK_HEATMAP_GROUPS = {
+    "빅테크·플랫폼": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "TSLA"],
+    "AI·반도체": ["NVDA", "AVGO", "AMD", "QCOM", "MU", "ASML"],
+    "AI·클라우드·소프트웨어": ["CRWD", "PLTR", "ADBE", "NOW", "SNOW", "PANW"],
+    "소비·유통": ["WMT", "COST", "SBUX", "MAR"],
+    "바이오·헬스케어": ["LLY", "UNH", "AMGN", "REGN"],
+    "에너지·전력": ["XOM", "CVX", "NEE"],
+    "결제·금융": ["V", "MA", "PYPL", "JPM"],
+}
 
 SERIES_STYLE = {
     "Opportunity": ("종목 매력도 (Opportunity)", "#6366f1", "top center"),
@@ -179,7 +189,8 @@ h1,h2,h3{letter-spacing:-.025em}
 .delta-card{box-sizing:border-box;border:1px solid #29415e;border-radius:12px;padding:12px 14px;background:#0d1b2d;min-height:92px;margin:4px 0 14px}.delta-label{color:#94a3b8;font-size:.78rem;font-weight:800;line-height:1.4}.delta-value{font-size:1.22rem;font-weight:900;margin-top:6px}.delta-change{font-size:.83rem;font-weight:800;margin-left:7px}
 .risk-summary{border:1px solid #29415e;border-radius:12px;padding:13px 16px;background:#0a1728;margin:4px 0 10px;color:#cbd5e1;line-height:1.65}.consensus-summary{border:1px solid #315272;border-radius:16px;padding:18px 20px;background:linear-gradient(135deg,#0d1b2d,#10243a);margin:10px 0 16px;line-height:1.75;color:#dbeafe}.consensus-meter{border:1px solid #29415e;border-radius:13px;padding:14px 16px;background:#0a1728;min-height:104px}.consensus-meter .label{color:#94a3b8;font-size:.8rem;font-weight:800}.consensus-meter .value{font-size:1.7rem;font-weight:900;margin-top:7px;color:#f8fafc}
 .entry-decision-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin:18px 0 12px}.entry-decision-card{box-sizing:border-box;border:1px solid #29415e;border-radius:14px;padding:16px 17px;background:#0a1728;min-height:122px}.entry-decision-label{color:#94a3b8;font-size:.76rem;font-weight:850;line-height:1.45}.entry-decision-value{font-size:1.34rem;font-weight:900;margin-top:9px;line-height:1.35}.entry-decision-interpretation{border:1px solid #315272;border-radius:14px;padding:17px 19px;background:linear-gradient(135deg,#0d1b2d,#10243a);color:#dbeafe;line-height:1.75;margin-bottom:18px}.entry-decision-interpretation b{color:#f8fafc}
-.price-plan{box-sizing:border-box;border:1px solid #315272;border-radius:16px;padding:18px 19px 8px;background:linear-gradient(135deg,#0d1b2d,#10243a);margin-bottom:16px}.price-plan-title{font-weight:900;color:#f8fafc;font-size:1.02rem;margin-bottom:2px}.price-plan-sub{color:#94a3b8;font-size:.8rem;margin-bottom:14px}.price-plan-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.price-plan-cell{border:1px solid #29415e;border-radius:12px;background:#0a1728;padding:11px 13px;min-height:86px}.price-plan-cell .k{color:#94a3b8;font-size:.72rem;font-weight:850;letter-spacing:.04em}.price-plan-cell .v{font-size:1.14rem;font-weight:900;margin-top:6px;color:#f8fafc;line-height:1.3}.price-plan-cell .s{font-size:.76rem;color:#8292a8;margin-top:3px}.price-plan-note{color:#94a3b8;font-size:.8rem;line-height:1.6;margin:2px 0 12px}
+.price-plan{box-sizing:border-box;border:1px solid #315272;border-radius:16px;padding:18px 19px 8px;background:linear-gradient(135deg,#0d1b2d,#10243a);margin-bottom:16px}.price-plan.highlighted{border:1.5px solid #38bdf8;box-shadow:0 0 0 1px rgba(56,189,248,.3)}.price-plan-title{font-weight:900;color:#f8fafc;font-size:1.02rem;margin-bottom:2px}.price-plan-badge{display:inline-block;background:#38bdf8;color:#04202f;font-size:.68rem;font-weight:850;padding:3px 9px;border-radius:99px;margin-left:6px;vertical-align:middle}.price-plan-sub{color:#94a3b8;font-size:.8rem;margin-bottom:14px}.price-plan-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:10px}.price-plan-cell{border:1px solid #29415e;border-radius:12px;background:#0a1728;padding:11px 13px;min-height:86px}.price-plan-cell .k{color:#94a3b8;font-size:.72rem;font-weight:850;letter-spacing:.04em}.price-plan-cell .v{font-size:1.14rem;font-weight:900;margin-top:6px;color:#f8fafc;line-height:1.3}.price-plan-cell .s{font-size:.76rem;color:#8292a8;margin-top:3px}.price-plan-note{color:#94a3b8;font-size:.8rem;line-height:1.6;margin:2px 0 12px}
+.sizing-flow{border:1px solid #29415e;border-radius:10px;background:#0a1728;padding:11px 15px;font-size:.88rem;color:#dbeafe;margin:4px 0 14px;line-height:1.6}.sizing-flow b{color:#f8fafc}
 .sector-tile{border-radius:10px;padding:10px;display:flex;flex-direction:column;justify-content:space-between;min-height:74px}.sector-tile .name{font-size:.78rem;font-weight:800;color:#f8fafc;line-height:1.3}.sector-tile .chg{font-size:.92rem;font-weight:900;margin-top:6px}
 .fg-shell{box-sizing:border-box;border:1px solid #29415e;border-radius:15px;padding:18px;background:#0d1b2d;text-align:center}.fg-value{font-size:2.3rem;font-weight:900;margin:6px 0 2px}.fg-label{font-weight:850;font-size:1.05rem}.fg-scale{display:flex;justify-content:space-between;color:#8292a8;font-size:.72rem;margin-top:10px}
 .idx-card{box-sizing:border-box;border:1px solid #29415e;border-radius:14px;padding:15px 16px;background:#0d1b2d;min-height:196px}.idx-card .head{display:flex;justify-content:space-between;align-items:baseline}.idx-card .name{font-weight:850;color:#f8fafc}.idx-card .price{font-size:1.5rem;font-weight:900;color:#f8fafc;margin:6px 0 10px}.idx-ma-row{display:flex;justify-content:space-between;font-size:.74rem;color:#94a3b8;border-top:1px solid #1c3049;padding:5px 0}.idx-ma-row b{color:#e2e8f0}
@@ -916,7 +927,7 @@ def _money_cur(value: float, is_kr: bool) -> str:
     return f"{value:,.0f}원" if is_kr else f"${value:,.2f}" if abs(value) < 10000 else f"${value:,.0f}"
 
 
-def render_price_plan(setup, title: str, is_kr: bool):
+def render_price_plan(setup, title: str, is_kr: bool, highlighted: bool = False):
     if setup.entry_price is None:
         return
     rr1 = f"R:R 1:{setup.risk_reward1:.2f}" if setup.risk_reward1 is not None else "R:R 계산 불가"
@@ -925,9 +936,11 @@ def render_price_plan(setup, title: str, is_kr: bool):
     t1_pct = (setup.target1 / setup.entry_price - 1) * 100 if setup.entry_price and setup.target1 else None
     t2_pct = (setup.target2 / setup.entry_price - 1) * 100 if setup.entry_price and setup.target2 else None
     unit_note = "원화(KRW) 기준" if is_kr else "미국 달러(USD) 기준"
+    card_cls = "price-plan highlighted" if highlighted else "price-plan"
+    badge = " <span class='price-plan-badge'>⭐ 우선 방식</span>" if highlighted else ""
     st.markdown(
-        f"<div class='price-plan'>"
-        f"<div class='price-plan-title'>💰 {title} · 가격 계획</div>"
+        f"<div class='{card_cls}'>"
+        f"<div class='price-plan-title'>💰 {title} · 가격 계획{badge}</div>"
         f"<div class='price-plan-sub'>지지/저항 구조와 ATR 기반으로 자동 계산한 참고 가격입니다 · {unit_note}. 매수·매도 신호가 아니라 계획 수립용 기준선입니다.</div>"
         f"<div class='price-plan-grid'>"
         f"<div class='price-plan-cell'><div class='k'>진입 기준가</div><div class='v'>{_money_cur(setup.entry_price, is_kr)}</div><div class='s'>Entry Reference</div></div>"
@@ -974,21 +987,49 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
         if account_size <= 0 or risk_per_share <= 0:
             st.info("계좌 규모를 올바르게 입력해 주세요.")
             return
+
         base_risk_amount = account_size * risk_pct_input / 100
         adj_risk_amount = base_risk_amount * risk.position_size_multiplier
-        shares = int(adj_risk_amount // risk_per_share)
+        shares_by_risk = int(adj_risk_amount // risk_per_share)
+        max_affordable_shares = int(account_size // setup.entry_price)
+        capped_by_cash = shares_by_risk > max_affordable_shares
+        shares = min(shares_by_risk, max_affordable_shares)
         position_value = shares * setup.entry_price
+        actual_risk_amount = shares * risk_per_share
         position_pct = position_value / account_size * 100 if account_size else 0.0
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("주당 손절 리스크", _money_cur(risk_per_share, is_kr))
-        r2.metric("Risk 배율 적용", f"{risk.position_size_multiplier:.2f}×", risk_ko(risk.level))
-        r3.metric("참고 수량", f"{shares:,}주")
-        r4.metric("투입 금액", _money_cur(position_value, is_kr), f"계좌의 {position_pct:.1f}%")
-        st.caption(
-            f"허용 손실 한도 {_money_cur(base_risk_amount, is_kr)} 중, 현재 Risk 상태({risk_ko(risk.level)})를 반영해 "
-            f"{_money_cur(adj_risk_amount, is_kr)}까지만 쓰도록 자동으로 낮췄습니다. 실제 매수 여부·수량·분할 진입 방식은 "
-            "본인 판단과 계좌 규정에 따라 결정하세요. 세금·수수료·슬리피지는 반영되지 않았습니다."
+        actual_risk_pct = actual_risk_amount / account_size * 100 if account_size else 0.0
+        multiplier_active = risk.position_size_multiplier < 0.999
+
+        cash_left = account_size - position_value
+        narrative = (
+            f"진입가 <b>{_money_cur(setup.entry_price, is_kr)}</b>에 참고 수량 <b>{shares:,}주</b>를 매수하면 "
+            f"투입 금액은 <b>{_money_cur(position_value, is_kr)}</b>이고, 계좌에는 <b>{_money_cur(cash_left, is_kr)}</b>이 현금으로 남습니다.<br>"
+            f"손절가 <b>{_money_cur(setup.stop_loss, is_kr)}</b>까지 하락해 정리하면, 주당 <b>{_money_cur(risk_per_share, is_kr)}</b>씩(진입가 대비 -{setup.risk_pct:.1f}%) "
+            f"총 <b>{_money_cur(actual_risk_amount, is_kr)}</b>을 잃습니다 — 계좌 전체 기준으로는 <b>{actual_risk_pct:.1f}%</b> 손실입니다."
         )
+        st.markdown(f"<div class='sizing-flow'>{narrative}</div>", unsafe_allow_html=True)
+
+        r1, r2, r3, r4 = st.columns(4)
+        r1.metric("허용 손실 금액", _money_cur(adj_risk_amount, is_kr), (f"Risk 배율 {risk.position_size_multiplier:.2f}× 적용" if multiplier_active else f"계좌의 {risk_pct_input:.1f}%"))
+        r2.metric("주당 손절 리스크", _money_cur(risk_per_share, is_kr), f"진입가 대비 -{setup.risk_pct:.1f}%" if setup.risk_pct else None)
+        r3.metric("참고 수량", f"{shares:,}주", "현금 한도로 축소됨" if capped_by_cash else None)
+        r4.metric("투입 금액", _money_cur(position_value, is_kr), f"계좌의 {position_pct:.1f}% · 잔여 현금 {_money_cur(cash_left, is_kr)}")
+
+        if position_pct >= 70:
+            st.warning(
+                f"투입 금액이 계좌의 {position_pct:.0f}%로 큽니다. 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 좁다 보니, "
+                "적은 손실 허용 비율로도 많은 수량 계산이 나온 것뿐이에요. **'손실 허용 비율'과 '투입 비중'은 다른 개념**입니다 — "
+                "손실 허용 비율은 '손절될 때 잃는 돈', 투입 비중은 '지금 이 종목에 묶이는 돈'입니다. "
+                "한 종목에 계좌를 너무 몰아넣고 싶지 않다면, 투입 비중에 별도 상한(예: 계좌의 20~30%)을 스스로 정해서 수량을 줄이는 것도 방법입니다."
+            )
+        if capped_by_cash:
+            st.info(
+                f"손실 허용 비율 기준으로는 {shares_by_risk:,}주가 필요하지만, 입력한 계좈 규모로는 최대 {max_affordable_shares:,}주까지만 살 수 있어 그만큼으로 제한했습니다. "
+                f"이 경우 실제 손절 시 손실은 목표보다 작은 {_money_cur(actual_risk_amount, is_kr)}(계좌의 {actual_risk_pct:.1f}%)입니다."
+            )
+        if multiplier_active:
+            st.caption(f"기본 허용 손실 한도 {_money_cur(base_risk_amount, is_kr)} 중, 현재 Risk 상태({risk_ko(risk.level)})를 반영해 {_money_cur(adj_risk_amount, is_kr)}까지만 쓰도록 자동으로 낮췄습니다.")
+        st.caption("실제 매수 여부·수량·분할 진입 방식은 본인 판단과 계좌 규정에 따라 결정하세요. 세금·수수료·슬리피지는 반영되지 않았습니다.")
 
 
 def render_entry_engine(a: dict):
@@ -1015,12 +1056,14 @@ def render_entry_engine(a: dict):
     )
 
     is_kr = market_for_symbol(a["symbol"]) == "KR"
+    pull_highlight = setups.preferred in ("Pullback Preferred", "Both Valid")
+    mom_highlight = setups.preferred in ("Momentum Preferred", "Both Valid")
     c1, c2 = st.columns(2)
-    for col, setup, icon in ((c1, setups.pullback, "🎯"), (c2, setups.momentum, "🚀")):
+    for col, setup, icon, hl in ((c1, setups.pullback, "🎯", pull_highlight), (c2, setups.momentum, "🚀", mom_highlight)):
         with col:
             setup_title = "눌림목 진입 상세 (Pullback Entry)" if setup.name == "Pullback" else "모멘텀 진입 상세 (Momentum Entry)"
             st.markdown(f"<div class='v6-kicker' style='margin:8px 0 10px'>{icon} {setup_title}</div>", unsafe_allow_html=True)
-            render_price_plan(setup, "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입", is_kr)
+            render_price_plan(setup, "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입", is_kr, highlighted=hl)
             render_position_sizing(setup, a["symbol"], a["risk"], "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입")
             factor_map = PULLBACK_FACTOR_KO if setup.name == "Pullback" else MOMENTUM_FACTOR_KO
             rows = [{"요소": factor_map.get(k, k), "점수": round(v,1), "해석": (f"{market_label_ko(a['market'].label)} {a['market'].score:.1f}" if k=="Market" else setup.details[k])} for k,v in setup.factors.items()]
@@ -1401,30 +1444,18 @@ def render_decision_dashboard(a: dict, symbol: str):
             st.markdown(f"<div class='dashboard-mini'><div class='label'>{label}</div><div class='value' style='color:{color}'>{value}</div><div class='v6-sub'>{sub}</div></div>",unsafe_allow_html=True)
 
     is_kr = market_for_symbol(a["symbol"]) == "KR"
+    pull_highlight = setups.preferred in ("Pullback Preferred", "Both Valid")
+    mom_highlight = setups.preferred in ("Momentum Preferred", "Both Valid")
     st.subheader("추천 매수가 · 목표가 · 손절가")
-    if setups.preferred == "Both Valid":
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            render_price_plan(setups.pullback, "눌림목 진입", is_kr)
-            render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입")
-        with pc2:
-            render_price_plan(setups.momentum, "모멘텀 진입", is_kr)
-            render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입")
-    elif setups.preferred == "Momentum Preferred":
-        render_price_plan(setups.momentum, "모멘텀 진입", is_kr)
-        render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입")
-    elif setups.preferred == "Pullback Preferred":
-        render_price_plan(setups.pullback, "눌림목 진입", is_kr)
+    if setups.preferred == "No Clear Setup":
+        st.caption("현재 뚜렷한 우선 Setup이 없어 두 방식의 참고 가격을 동일한 비중으로 함께 표시합니다.")
+    pc1, pc2 = st.columns(2)
+    with pc1:
+        render_price_plan(setups.pullback, "눌림목 진입", is_kr, highlighted=pull_highlight)
         render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입")
-    else:
-        st.caption("현재 뚜렷한 우선 Setup이 없어 두 방식의 참고 가격을 함께 표시합니다.")
-        pc1, pc2 = st.columns(2)
-        with pc1:
-            render_price_plan(setups.pullback, "눌림목 진입 (참고)", is_kr)
-            render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입 (참고)")
-        with pc2:
-            render_price_plan(setups.momentum, "모멘텀 진입 (참고)", is_kr)
-            render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입 (참고)")
+    with pc2:
+        render_price_plan(setups.momentum, "모멘텀 진입", is_kr, highlighted=mom_highlight)
+        render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입")
 
     st.subheader("현재 · 변화 · 과거 검증")
     t1,t2,t3=st.columns(3)
@@ -1816,6 +1847,42 @@ def render_treemap(names: list[str], tickers: list[str], key: str, height: int =
         st.info("히트맵 데이터를 일시적으로 불러오지 못했습니다.")
 
 
+def render_grouped_treemap(groups: dict[str, list[str]], key: str, height: int = 480):
+    """Nested treemap: category tiles containing individual ticker tiles,
+    mirroring a Finviz-style grouped heatmap (text-only; no logo icons)."""
+    all_tickers = [t for lst in groups.values() for t in lst]
+    change_map = dict(zip(all_tickers, _pct_changes(all_tickers)))
+    ids, labels, parents, values, colors = [], [], [], [], []
+    for cat, tickers in groups.items():
+        cat_changes = [change_map.get(t, 0.0) for t in tickers]
+        cat_avg = sum(cat_changes) / len(cat_changes) if cat_changes else 0.0
+        cat_values = [max(abs(change_map.get(t, 0.0)), 0.35) for t in tickers]
+        ids.append(cat)
+        labels.append(f"{cat}  {cat_avg:+.2f}%  ·  {len(tickers)}종목")
+        parents.append("")
+        values.append(sum(cat_values))
+        colors.append(cat_avg)
+        for t, v in zip(tickers, cat_values):
+            ch = change_map.get(t, 0.0)
+            ids.append(f"{cat}|{t}")
+            labels.append(f"{t}<br>{ch:+.2f}%")
+            parents.append(cat)
+            values.append(v)
+            colors.append(ch)
+    try:
+        fig = go.Figure(go.Treemap(
+            ids=ids, labels=labels, parents=parents, values=values,
+            marker=dict(colors=colors, colorscale=[[0, "#7f1d3a"], [0.5, "#16232f"], [1, "#0f6b4a"]], cmid=0, showscale=False, line=dict(width=1.5, color="#07111f")),
+            textinfo="label", textfont=dict(size=12, color="#f8fafc"),
+            pathbar=dict(visible=False), tiling=dict(packing="squarify"),
+        ))
+        fig.update_layout(margin=dict(l=4, r=4, t=4, b=4), height=height, paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=key)
+        st.markdown(HEATMAP_LEGEND, unsafe_allow_html=True)
+    except Exception:
+        st.info("히트맵 데이터를 일시적으로 불러오지 못했습니다.")
+
+
 def render_sector_heatmap(is_us: bool):
     st.markdown("<div class='v6-kicker' style='margin:6px 0 4px'>🟩 업종 히트맵 · Sector Heatmap</div>", unsafe_allow_html=True)
     mapping = US_SECTOR_HEATMAP if is_us else KR_SECTOR_HEATMAP
@@ -1838,14 +1905,16 @@ def render_sector_heatmap(is_us: bool):
 
 def render_stock_heatmap(is_us: bool):
     st.markdown("<div class='v6-kicker' style='margin:16px 0 4px'>🧩 개별 종목 히트맵 · Mega-cap Heatmap</div>", unsafe_allow_html=True)
-    mapping = FALLBACK_NASDAQ if is_us else FALLBACK_KOSPI
-    st.caption(
-        "시가총액 상위 대형주 개별 종목의 당일 등락률입니다. "
-        + ("나스닥 대표 대형 기술주 중심입니다 — 업종 흐름보다 더 세밀하게, 특정 종목이 업종 전체를 끌어올리거나 끌어내리는지 볼 수 있습니다."
-           if is_us else "코스피 시가총액 상위 대표 종목 중심입니다.")
-    )
-    names, tickers = list(mapping.values()), list(mapping.keys())
-    render_treemap(names, tickers, key=f"stock_heatmap_{'us' if is_us else 'kr'}", height=300)
+    if is_us:
+        st.caption(
+            "테마별로 묶은 미국 대형주 개별 종목의 당일 등락률입니다. 큰 타일(카테고리)이 그 안의 종목들을 감싸는 중첩 구조로, "
+            "어떤 테마가 강한지 + 그 안에서 어떤 종목이 끌고 가는지를 함께 볼 수 있습니다. (로고 이미지는 지원되지 않아 티커 텍스트로 표시합니다)"
+        )
+        render_grouped_treemap(US_STOCK_HEATMAP_GROUPS, key="stock_heatmap_us_grouped", height=480)
+    else:
+        st.caption("코스피 시가총액 상위 대표 종목 중심의 개별 등락률입니다.")
+        names, tickers = list(FALLBACK_KOSPI.values()), list(FALLBACK_KOSPI.keys())
+        render_treemap(names, tickers, key="stock_heatmap_kr", height=300)
 
 
 def render_fear_greed(market) -> None:
@@ -2656,7 +2725,7 @@ def render_calibration(a: dict, symbol: str):
 
 # -------------------- App shell --------------------
 st.title("Stock Analyzer by Kijungnam")
-st.caption("V6.0.17 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
+st.caption("V6.0.21 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
 
 with st.expander("🔥 V6 종목 스캐너 · 시장 전체 후보 찾기", expanded=False):
     render_scanner_section()
