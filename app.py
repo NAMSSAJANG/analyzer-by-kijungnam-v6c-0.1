@@ -24,12 +24,12 @@ from market_regime import build_market_regime, market_for_symbol
 from opportunity_engine import build_opportunity
 from quant_engine import build_quant_snapshot, financial_rows
 from risk_engine import build_risk_snapshot
-from scanner_engine import scan_market, top_views
+from scanner_engine import FALLBACK_KOSPI, FALLBACK_NASDAQ, scan_market, top_views
 from setup_engine import build_setups
 from sr_engine import build_zones
 from technical_engine import build_technical_snapshot
 
-st.set_page_config(page_title="Stock Analyzer V6.0.16", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Stock Analyzer V6.0.17", page_icon="📈", layout="wide")
 
 DB_FILE = Path(os.getenv("ANALYZER_DB_FILE", ".data/stock_analyzer_v6.sqlite"))
 HISTORY = SQLiteHistoryStore(DB_FILE)
@@ -910,7 +910,13 @@ def render_ai_briefings(a: dict):
     with c4: briefing("시장·리스크 브리핑", texts["market"], "MARKET / RISK")
 
 
-def render_price_plan(setup, title: str):
+def _money_cur(value: float, is_kr: bool) -> str:
+    if value is None or not np.isfinite(value):
+        return "—"
+    return f"{value:,.0f}원" if is_kr else f"${value:,.2f}" if abs(value) < 10000 else f"${value:,.0f}"
+
+
+def render_price_plan(setup, title: str, is_kr: bool):
     if setup.entry_price is None:
         return
     rr1 = f"R:R 1:{setup.risk_reward1:.2f}" if setup.risk_reward1 is not None else "R:R 계산 불가"
@@ -918,24 +924,19 @@ def render_price_plan(setup, title: str):
     risk_txt = f"진입가 대비 -{setup.risk_pct:.1f}%" if setup.risk_pct is not None else ""
     t1_pct = (setup.target1 / setup.entry_price - 1) * 100 if setup.entry_price and setup.target1 else None
     t2_pct = (setup.target2 / setup.entry_price - 1) * 100 if setup.entry_price and setup.target2 else None
+    unit_note = "원화(KRW) 기준" if is_kr else "미국 달러(USD) 기준"
     st.markdown(
         f"<div class='price-plan'>"
         f"<div class='price-plan-title'>💰 {title} · 가격 계획</div>"
-        f"<div class='price-plan-sub'>지지/저항 구조와 ATR 기반으로 자동 계산한 참고 가격입니다. 매수·매도 신호가 아니라 계획 수립용 기준선입니다.</div>"
+        f"<div class='price-plan-sub'>지지/저항 구조와 ATR 기반으로 자동 계산한 참고 가격입니다 · {unit_note}. 매수·매도 신호가 아니라 계획 수립용 기준선입니다.</div>"
         f"<div class='price-plan-grid'>"
-        f"<div class='price-plan-cell'><div class='k'>진입 기준가</div><div class='v'>{money(setup.entry_price)}</div><div class='s'>Entry Reference</div></div>"
-        f"<div class='price-plan-cell'><div class='k'>손절가</div><div class='v' style='color:#fb7185'>{money(setup.stop_loss)}</div><div class='s'>{risk_txt}</div></div>"
-        f"<div class='price-plan-cell'><div class='k'>목표가 1</div><div class='v' style='color:#34d399'>{money(setup.target1)}</div><div class='s'>{pct(t1_pct,1)} · {rr1}</div></div>"
-        f"<div class='price-plan-cell'><div class='k'>목표가 2</div><div class='v' style='color:#34d399'>{money(setup.target2)}</div><div class='s'>{pct(t2_pct,1)} · {rr2}</div></div>"
+        f"<div class='price-plan-cell'><div class='k'>진입 기준가</div><div class='v'>{_money_cur(setup.entry_price, is_kr)}</div><div class='s'>Entry Reference</div></div>"
+        f"<div class='price-plan-cell'><div class='k'>손절가</div><div class='v' style='color:#fb7185'>{_money_cur(setup.stop_loss, is_kr)}</div><div class='s'>{risk_txt}</div></div>"
+        f"<div class='price-plan-cell'><div class='k'>목표가 1</div><div class='v' style='color:#34d399'>{_money_cur(setup.target1, is_kr)}</div><div class='s'>{pct(t1_pct,1)} · {rr1}</div></div>"
+        f"<div class='price-plan-cell'><div class='k'>목표가 2</div><div class='v' style='color:#34d399'>{_money_cur(setup.target2, is_kr)}</div><div class='s'>{pct(t2_pct,1)} · {rr2}</div></div>"
         f"</div></div>",
         unsafe_allow_html=True,
     )
-
-
-def _money_cur(value: float, is_kr: bool) -> str:
-    if value is None or not np.isfinite(value):
-        return "—"
-    return f"{value:,.0f}원" if is_kr else f"${value:,.2f}" if abs(value) < 10000 else f"${value:,.0f}"
 
 
 def render_position_sizing(setup, symbol: str, risk, title: str):
@@ -946,24 +947,32 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
         return
     is_kr = market_for_symbol(symbol) == "KR"
     default_account = 10_000_000.0 if is_kr else 10_000.0
-    step = 1_000_000.0 if is_kr else 1_000.0
+    currency_hint = "원" if is_kr else "달러($)"
     with st.expander(f"🧮 {title} · 포지션 사이징 계산기", expanded=False):
         st.caption(
             "계좌 규모와 '한 번 진입에서 감수할 최대 손실 비율'을 입력하면, 위 손절가를 기준으로 참고 수량을 계산합니다. "
             "이 종목을 사라는 뜻이 아니라, 정한 손절가에서 실제로 손절했을 때 계좌 전체 손실을 원하는 비율 이하로 묶기 위한 계산기입니다."
         )
         ic1, ic2 = st.columns(2)
-        account_size = ic1.number_input(
-            "계좌 규모", min_value=0.0, value=default_account, step=step,
-            key=f"acct_{setup.name}_{symbol}", format="%.0f",
+        acct_str = ic1.text_input(
+            f"계좌 규모 · {currency_hint} (콤마 넣어도 됩니다)", value=f"{default_account:,.0f}",
+            key=f"acct_{setup.name}_{symbol}",
         )
+        try:
+            account_size = float(acct_str.replace(",", "").replace(" ", "").replace("원", "").replace("$", ""))
+        except ValueError:
+            account_size = -1.0
+        if account_size < 0:
+            ic1.caption("숫자만 입력해 주세요. 예: 10,000,000")
+        else:
+            ic1.caption(f"입력값 확인 · {_money_cur(account_size, is_kr)}")
         risk_pct_input = ic2.number_input(
             "1회 손실 허용 비율 (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1,
             key=f"riskpct_{setup.name}_{symbol}",
         )
         risk_per_share = setup.entry_price - setup.stop_loss
         if account_size <= 0 or risk_per_share <= 0:
-            st.info("계좌 규모를 입력해 주세요.")
+            st.info("계좌 규모를 올바르게 입력해 주세요.")
             return
         base_risk_amount = account_size * risk_pct_input / 100
         adj_risk_amount = base_risk_amount * risk.position_size_multiplier
@@ -1005,12 +1014,13 @@ def render_entry_engine(a: dict):
         unsafe_allow_html=True,
     )
 
+    is_kr = market_for_symbol(a["symbol"]) == "KR"
     c1, c2 = st.columns(2)
     for col, setup, icon in ((c1, setups.pullback, "🎯"), (c2, setups.momentum, "🚀")):
         with col:
             setup_title = "눌림목 진입 상세 (Pullback Entry)" if setup.name == "Pullback" else "모멘텀 진입 상세 (Momentum Entry)"
             st.markdown(f"<div class='v6-kicker' style='margin:8px 0 10px'>{icon} {setup_title}</div>", unsafe_allow_html=True)
-            render_price_plan(setup, "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입")
+            render_price_plan(setup, "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입", is_kr)
             render_position_sizing(setup, a["symbol"], a["risk"], "눌림목 진입" if setup.name == "Pullback" else "모멘텀 진입")
             factor_map = PULLBACK_FACTOR_KO if setup.name == "Pullback" else MOMENTUM_FACTOR_KO
             rows = [{"요소": factor_map.get(k, k), "점수": round(v,1), "해석": (f"{market_label_ko(a['market'].label)} {a['market'].score:.1f}" if k=="Market" else setup.details[k])} for k,v in setup.factors.items()]
@@ -1390,29 +1400,30 @@ def render_decision_dashboard(a: dict, symbol: str):
         with col:
             st.markdown(f"<div class='dashboard-mini'><div class='label'>{label}</div><div class='value' style='color:{color}'>{value}</div><div class='v6-sub'>{sub}</div></div>",unsafe_allow_html=True)
 
+    is_kr = market_for_symbol(a["symbol"]) == "KR"
     st.subheader("추천 매수가 · 목표가 · 손절가")
     if setups.preferred == "Both Valid":
         pc1, pc2 = st.columns(2)
         with pc1:
-            render_price_plan(setups.pullback, "눌림목 진입")
+            render_price_plan(setups.pullback, "눌림목 진입", is_kr)
             render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입")
         with pc2:
-            render_price_plan(setups.momentum, "모멘텀 진입")
+            render_price_plan(setups.momentum, "모멘텀 진입", is_kr)
             render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입")
     elif setups.preferred == "Momentum Preferred":
-        render_price_plan(setups.momentum, "모멘텀 진입")
+        render_price_plan(setups.momentum, "모멘텀 진입", is_kr)
         render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입")
     elif setups.preferred == "Pullback Preferred":
-        render_price_plan(setups.pullback, "눌림목 진입")
+        render_price_plan(setups.pullback, "눌림목 진입", is_kr)
         render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입")
     else:
         st.caption("현재 뚜렷한 우선 Setup이 없어 두 방식의 참고 가격을 함께 표시합니다.")
         pc1, pc2 = st.columns(2)
         with pc1:
-            render_price_plan(setups.pullback, "눌림목 진입 (참고)")
+            render_price_plan(setups.pullback, "눌림목 진입 (참고)", is_kr)
             render_position_sizing(setups.pullback, a["symbol"], risk, "눌림목 진입 (참고)")
         with pc2:
-            render_price_plan(setups.momentum, "모멘텀 진입 (참고)")
+            render_price_plan(setups.momentum, "모멘텀 진입 (참고)", is_kr)
             render_position_sizing(setups.momentum, a["symbol"], risk, "모멘텀 진입 (참고)")
 
     st.subheader("현재 · 변화 · 과거 검증")
@@ -1729,7 +1740,15 @@ def regime_history(symbol: str, sector: str, count: int = 10) -> pd.DataFrame:
         return pd.DataFrame()
 
 
-def index_card(name: str, ticker: str, key: str):
+HEATMAP_LEGEND = (
+    "<div style='display:flex;gap:18px;flex-wrap:wrap;align-items:center;margin:8px 0 2px;font-size:.8rem;color:#94a3b8'>"
+    "<span><span style='display:inline-block;width:11px;height:11px;background:#0f6b4a;border-radius:3px;margin-right:5px;vertical-align:-1px'></span>상승 (진할수록 큰 폭)</span>"
+    "<span><span style='display:inline-block;width:11px;height:11px;background:#7f1d3a;border-radius:3px;margin-right:5px;vertical-align:-1px'></span>하락 (진할수록 큰 폭)</span>"
+    "<span>· 타일 크기 = 등락폭 크기 (변동이 클수록 타일이 커짐)</span></div>"
+)
+
+
+def index_card(name: str, ticker: str, key: str, is_kr: bool):
     try:
         d = prices(ticker, "18mo", "1d")
         c = d["Close"].dropna()
@@ -1746,13 +1765,13 @@ def index_card(name: str, ticker: str, key: str):
                 dist = (current / ma_val - 1) * 100 if ma_val else 0.0
                 mcolor = "#34d399" if dist >= 0 else "#fb7185"
                 marrow = "▲" if dist >= 0 else "▼"
-                rows_html += f"<div class='idx-ma-row'><span>MA{p}</span><b style='color:{mcolor}'>{money(ma_val)} {marrow}{abs(dist):.1f}%</b></div>"
+                rows_html += f"<div class='idx-ma-row'><span>MA{p}</span><b style='color:{mcolor}'>{_money_cur(ma_val, is_kr)} {marrow}{abs(dist):.1f}%</b></div>"
             else:
                 rows_html += f"<div class='idx-ma-row'><span>MA{p}</span><span style='color:#5b6b82'>데이터 부족</span></div>"
         st.markdown(
             f"<div class='idx-card'><div class='head'><span class='name'>{name}</span>"
             f"<span style='color:{color};font-weight:850'>{arrow} {abs(change):.2f}%</span></div>"
-            f"<div class='price'>{money(current)}</div>{rows_html}</div>",
+            f"<div class='price'>{_money_cur(current, is_kr)}</div>{rows_html}</div>",
             unsafe_allow_html=True,
         )
     except Exception:
@@ -1761,11 +1780,40 @@ def index_card(name: str, ticker: str, key: str):
 
 def render_index_summary(is_us: bool):
     st.markdown("<div class='v6-kicker' style='margin:4px 0 12px'>📇 지수 한눈에 보기 · Index Snapshot</div>", unsafe_allow_html=True)
+    st.caption("가격은 " + ("미국 달러($) 기준입니다." if is_us else "원화(원) 기준입니다. 단, 원·달러는 환율이라 예외입니다."))
     tickers = US_INDEX_CARDS if is_us else KR_INDEX_CARDS
     cols = st.columns(len(tickers))
     for col, (name, ticker) in zip(cols, tickers):
         with col:
-            index_card(name, ticker, f"idxcard_{ticker}")
+            index_card(name, ticker, f"idxcard_{ticker}", is_kr=(not is_us) and ticker != "KRW=X")
+
+
+def _pct_changes(tickers: list[str]) -> list[float]:
+    changes = []
+    for t in tickers:
+        try:
+            c = prices(t, "5d", "1d").Close.dropna()
+            changes.append(float((c.iloc[-1] / c.iloc[-2] - 1) * 100) if len(c) >= 2 else 0.0)
+        except Exception:
+            changes.append(0.0)
+    return changes
+
+
+def render_treemap(names: list[str], tickers: list[str], key: str, height: int = 320):
+    changes = _pct_changes(tickers)
+    try:
+        fig = go.Figure(go.Treemap(
+            labels=[f"{n}<br>{ch:+.2f}%" for n, ch in zip(names, changes)],
+            parents=[""] * len(names),
+            values=[max(abs(ch), 0.35) for ch in changes],
+            marker=dict(colors=changes, colorscale=[[0, "#7f1d3a"], [0.5, "#16232f"], [1, "#0f6b4a"]], cmid=0, showscale=False, line=dict(width=1, color="#07111f")),
+            textinfo="label", textfont=dict(size=13, color="#f8fafc"),
+        ))
+        fig.update_layout(margin=dict(l=4, r=4, t=4, b=4), height=height, paper_bgcolor="rgba(0,0,0,0)")
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=key)
+        st.markdown(HEATMAP_LEGEND, unsafe_allow_html=True)
+    except Exception:
+        st.info("히트맵 데이터를 일시적으로 불러오지 못했습니다.")
 
 
 def render_sector_heatmap(is_us: bool):
@@ -1776,25 +1824,28 @@ def render_sector_heatmap(is_us: bool):
     else:
         st.caption("업종별 대표 종목 1개를 기준으로 한 참고용 등락률입니다. 실제 업종 지수(예: KRX 업종지수)와는 차이가 있을 수 있습니다.")
     names, tickers = list(mapping.keys()), list(mapping.values())
-    changes = []
-    for t in tickers:
-        try:
-            c = prices(t, "5d", "1d").Close.dropna()
-            changes.append(float((c.iloc[-1] / c.iloc[-2] - 1) * 100) if len(c) >= 2 else 0.0)
-        except Exception:
-            changes.append(0.0)
-    try:
-        fig = go.Figure(go.Treemap(
-            labels=[f"{n}<br>{ch:+.2f}%" for n, ch in zip(names, changes)],
-            parents=[""] * len(names),
-            values=[max(abs(ch), 0.35) for ch in changes],
-            marker=dict(colors=changes, colorscale=[[0, "#7f1d3a"], [0.5, "#16232f"], [1, "#0f6b4a"]], cmid=0, showscale=False, line=dict(width=1, color="#07111f")),
-            textinfo="label", textfont=dict(size=13, color="#f8fafc"),
-        ))
-        fig.update_layout(margin=dict(l=4, r=4, t=4, b=4), height=320, paper_bgcolor="rgba(0,0,0,0)")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False}, key=f"sector_heatmap_{'us' if is_us else 'kr'}")
-    except Exception:
-        st.info("업종 히트맵 데이터를 일시적으로 불러오지 못했습니다.")
+    render_treemap(names, tickers, key=f"sector_heatmap_{'us' if is_us else 'kr'}", height=320)
+    with st.expander("히트맵 읽는 법 · 어떻게 쓰면 좋은지", expanded=False):
+        st.markdown(
+            "- **타일 크기**는 오늘 등락폭의 크기입니다. 많이 움직인 업종일수록 타일이 커집니다.\n"
+            "- **색**은 방향(초록 상승 · 빨강 하락), **진하기**는 강도입니다. 연한 색은 보합에 가깝고, 진할수록 변동이 큽니다.\n"
+            "- 시장 전체가 대부분 초록이면 위험선호(Risk-On) 국면일 가능성이, 대부분 빨강이면 위험회피 국면일 가능성이 있습니다. 다만 이 화면 하나로 시장 전체를 단정하지 말고, 위 시장 건강도 점수와 함께 보세요.\n"
+            "- 관심 종목이 속한 업종이 오늘 강한지 약한지 먼저 확인하면, 개별 종목 분석의 상대강도(Relative Strength) 점수를 해석할 때 참고가 됩니다.\n"
+            + ("- 미국은 실제 GICS 섹터를 대표하는 SPDR ETF(XLK, XLF 등) 기준이라 업종 흐름을 비교적 정확히 반영합니다." if is_us else
+               "- 한국은 업종별 대표 종목 **1개**만 사용한 근사치입니다. 그 종목만의 개별 이슈(실적 발표, 공시 등)로 흔들릴 수 있어 실제 업종 전체 흐름과 다를 수 있습니다.")
+        )
+
+
+def render_stock_heatmap(is_us: bool):
+    st.markdown("<div class='v6-kicker' style='margin:16px 0 4px'>🧩 개별 종목 히트맵 · Mega-cap Heatmap</div>", unsafe_allow_html=True)
+    mapping = FALLBACK_NASDAQ if is_us else FALLBACK_KOSPI
+    st.caption(
+        "시가총액 상위 대형주 개별 종목의 당일 등락률입니다. "
+        + ("나스닥 대표 대형 기술주 중심입니다 — 업종 흐름보다 더 세밀하게, 특정 종목이 업종 전체를 끌어올리거나 끌어내리는지 볼 수 있습니다."
+           if is_us else "코스피 시가총액 상위 대표 종목 중심입니다.")
+    )
+    names, tickers = list(mapping.values()), list(mapping.keys())
+    render_treemap(names, tickers, key=f"stock_heatmap_{'us' if is_us else 'kr'}", height=300)
 
 
 def render_fear_greed(market) -> None:
@@ -1891,6 +1942,9 @@ def render_market_dashboard():
         render_sector_heatmap(is_us)
     with gcol:
         render_fear_greed(market)
+
+    st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
+    render_stock_heatmap(is_us)
 
     st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
     render_macro_risk_chart(is_us)
@@ -2602,7 +2656,7 @@ def render_calibration(a: dict, symbol: str):
 
 # -------------------- App shell --------------------
 st.title("Stock Analyzer by Kijungnam")
-st.caption("V6.0.16 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
+st.caption("V6.0.17 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
 
 with st.expander("🔥 V6 종목 스캐너 · 시장 전체 후보 찾기", expanded=False):
     render_scanner_section()
