@@ -952,10 +952,180 @@ def render_price_plan(setup, title: str, is_kr: bool, highlighted: bool = False)
     )
 
 
+def _render_sizing_precise(setup, is_kr: bool, account_size: float, risk):
+    """정밀 모드 · 손절 거리 기반 고정 리스크 % 계산 (기존 로직)."""
+    risk_pct_input = st.number_input(
+        "1회 손실 허용 비율 (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1,
+        key=f"riskpct_{setup.name}_{setup.entry_price}",
+    )
+    risk_per_share = setup.entry_price - setup.stop_loss
+    if risk_per_share <= 0:
+        st.info("손절가가 진입가보다 높아 리스크를 계산할 수 없습니다.")
+        return
+
+    base_risk_amount = account_size * risk_pct_input / 100
+    adj_risk_amount = base_risk_amount * risk.position_size_multiplier
+    shares_by_risk = int(adj_risk_amount // risk_per_share)
+    max_affordable_shares = int(account_size // setup.entry_price)
+    capped_by_cash = shares_by_risk > max_affordable_shares
+    shares = min(shares_by_risk, max_affordable_shares)
+    position_value = shares * setup.entry_price
+    actual_risk_amount = shares * risk_per_share
+    position_pct = position_value / account_size * 100 if account_size else 0.0
+    actual_risk_pct = actual_risk_amount / account_size * 100 if account_size else 0.0
+    multiplier_active = risk.position_size_multiplier < 0.999
+
+    cash_left = account_size - position_value
+    narrative = (
+        f"진입가 <b>{_money_cur(setup.entry_price, is_kr)}</b>에 참고 수량 <b>{shares:,}주</b>를 매수하면 "
+        f"투입 금액은 <b>{_money_cur(position_value, is_kr)}</b>이고, 계좌에는 <b>{_money_cur(cash_left, is_kr)}</b>이 현금으로 남습니다.<br>"
+        f"손절가 <b>{_money_cur(setup.stop_loss, is_kr)}</b>까지 하락해 정리하면, 주당 <b>{_money_cur(risk_per_share, is_kr)}</b>씩(진입가 대비 -{setup.risk_pct:.1f}%) "
+        f"총 <b>{_money_cur(actual_risk_amount, is_kr)}</b>을 잃습니다 — 계좌 전체 기준으로는 <b>{actual_risk_pct:.1f}%</b> 손실입니다."
+    )
+    st.markdown(f"<div class='sizing-flow'>{narrative}</div>", unsafe_allow_html=True)
+
+    r1, r2, r3, r4 = st.columns(4)
+    r1.metric("허용 손실 금액", _money_cur(adj_risk_amount, is_kr), (f"Risk 배율 {risk.position_size_multiplier:.2f}× 적용" if multiplier_active else f"계좌의 {risk_pct_input:.1f}%"))
+    r2.metric("주당 손절 리스크", _money_cur(risk_per_share, is_kr), f"진입가 대비 -{setup.risk_pct:.1f}%" if setup.risk_pct else None)
+    r3.metric("참고 수량", f"{shares:,}주", "현금 한도로 축소됨" if capped_by_cash else None)
+    r4.metric("투입 금액", _money_cur(position_value, is_kr), f"계좌의 {position_pct:.1f}% · 잔여 현금 {_money_cur(cash_left, is_kr)}")
+
+    if shares == 0 and shares_by_risk == 0:
+        st.warning(
+            f"허용 손실 {_money_cur(adj_risk_amount, is_kr)}로는 주당 손절 리스크 {_money_cur(risk_per_share, is_kr)}짜리 1주도 살 수 없어 **참고 수량이 0주**로 나왔습니다. "
+            f"이 종목의 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 넓은 편이라 생기는, 계산상 정상적인 결과입니다(오류 아님). "
+            "계좌 규모를 늘리거나 손실 허용 비율을 높이면 1주부터 계산되기 시작하고, 반대로 이 손절 거리 자체가 부담스럽다면 이 셋업은 지금 비중 관리 기준으로는 맞지 않는 것으로 볼 수 있습니다."
+        )
+    elif position_pct >= 70:
+        st.warning(
+            f"투입 금액이 계좌의 {position_pct:.0f}%로 큽니다. 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 좁다 보니, "
+            "적은 손실 허용 비율로도 많은 수량 계산이 나온 것뿐이에요. **'손실 허용 비율'과 '투입 비중'은 다른 개념**입니다 — "
+            "손실 허용 비율은 '손절될 때 잃는 돈', 투입 비중은 '지금 이 종목에 묶이는 돈'입니다. "
+            "한 종목에 계좌를 너무 몰아넣고 싶지 않다면, 투입 비중에 별도 상한(예: 계좌의 20~30%)을 스스로 정해서 수량을 줄이는 것도 방법입니다."
+        )
+    if capped_by_cash:
+        st.info(
+            f"손실 허용 비율 기준으로는 {shares_by_risk:,}주가 필요하지만, 입력한 계좌 규모로는 최대 {max_affordable_shares:,}주까지만 살 수 있어 그만큼으로 제한했습니다. "
+            f"이 경우 실제 손절 시 손실은 목표보다 작은 {_money_cur(actual_risk_amount, is_kr)}(계좌의 {actual_risk_pct:.1f}%)입니다."
+        )
+    if multiplier_active:
+        st.caption(f"기본 허용 손실 한도 {_money_cur(base_risk_amount, is_kr)} 중, 현재 Risk 상태({risk_ko(risk.level)})를 반영해 {_money_cur(adj_risk_amount, is_kr)}까지만 쓰도록 자동으로 낮췄습니다.")
+
+
+def _render_sizing_simple(setup, is_kr: bool, account_size: float):
+    """간편 모드 · 손절 거리를 계산에 직접 쓰지 않고, 계좌 대비 목표 비중만으로 수량을 정합니다.
+    손절 거리·Risk 배율 개념 자체가 낯선 사용자를 위한 가장 단순한 계산 방식입니다."""
+    alloc_pct = st.number_input(
+        "투입 비중 (계좌 대비 %)", min_value=1.0, max_value=100.0, value=10.0, step=1.0,
+        key=f"allocpct_{setup.name}_{setup.entry_price}",
+    )
+    shares = int((account_size * alloc_pct / 100) // setup.entry_price)
+    position_value = shares * setup.entry_price
+    cash_left = account_size - position_value
+    risk_per_share = setup.entry_price - setup.stop_loss
+    risk_amount = shares * risk_per_share
+    risk_pct_of_acct = risk_amount / account_size * 100 if account_size else 0.0
+
+    narrative = (
+        f"계좌의 <b>{alloc_pct:.0f}%</b>를 쓴다고 하면, 진입가 <b>{_money_cur(setup.entry_price, is_kr)}</b>에 "
+        f"<b>{shares:,}주</b>를 살 수 있습니다. 실제 투입 금액은 <b>{_money_cur(position_value, is_kr)}</b>이고 "
+        f"계좌에는 <b>{_money_cur(cash_left, is_kr)}</b>이 현금으로 남습니다."
+    )
+    st.markdown(f"<div class='sizing-flow'>{narrative}</div>", unsafe_allow_html=True)
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("참고 수량", f"{shares:,}주", f"계좌의 {alloc_pct:.0f}%")
+    r2.metric("투입 금액", _money_cur(position_value, is_kr), f"잔여 현금 {_money_cur(cash_left, is_kr)}")
+    r3.metric("손절 시 손실 (참고)", _money_cur(risk_amount, is_kr), f"계좌의 {risk_pct_of_acct:.1f}%" if account_size else None)
+
+    st.caption(
+        "이 모드는 '계좌의 몇 %를 이 종목에 쓸지'만으로 수량을 정합니다. 손절 거리는 계산에 직접 쓰이지 않지만, "
+        "그렇게 정한 수량으로 손절가에 도달하면 얼마를 잃는지는 위 '손절 시 손실'에서 그대로 확인할 수 있습니다."
+    )
+    if shares > 0 and risk_pct_of_acct >= 3.0:
+        st.warning(
+            f"이 비중으로 손절가까지 하락하면 계좌의 {risk_pct_of_acct:.1f}%를 잃습니다. 한 번의 손절로 감수하기엔 큰 편이니, "
+            "비중을 낮추거나 '정밀 모드'에서 손실 허용 비율을 직접 정하는 방식도 함께 비교해 보세요."
+        )
+
+
+def _render_sizing_tranches(setup, is_kr: bool, account_size: float, risk):
+    """분할 매수 모드 · 손절가는 하나지만, 진입은 setup.tranches에 정의된 3단계 가격에
+    나눠서 이뤄진다고 가정하고 계산합니다. 손절 하나에 전량이 걸리는 정밀 모드와 달리,
+    가격이 계획대로 흘러가는 각 단계에서 나눠 사는 시나리오를 보여줍니다."""
+    if not setup.tranches:
+        st.info("이 셋업에는 분할 매수 참고 가격이 없습니다.")
+        return
+    risk_pct_input = st.number_input(
+        "1회 손실 허용 비율 (%) · 3단계 전체 합산 기준", min_value=0.1, max_value=10.0, value=1.0, step=0.1,
+        key=f"riskpct_tr_{setup.name}_{setup.entry_price}",
+    )
+    base_risk_amount = account_size * risk_pct_input / 100
+    adj_risk_amount = base_risk_amount * risk.position_size_multiplier
+    multiplier_active = risk.position_size_multiplier < 0.999
+
+    weighted_avg_price = sum(t.price * t.weight_pct / 100 for t in setup.tranches)
+    blended_risk_per_share = weighted_avg_price - setup.stop_loss
+    if blended_risk_per_share <= 0 or weighted_avg_price <= 0:
+        st.info("손절가 기준으로 리스크를 계산할 수 없습니다.")
+        return
+
+    total_shares = int(adj_risk_amount // blended_risk_per_share)
+    max_affordable = int(account_size // weighted_avg_price)
+    capped_by_cash = total_shares > max_affordable
+    total_shares = min(total_shares, max_affordable)
+
+    rows: list[tuple] = []
+    allocated = 0
+    for i, t in enumerate(setup.tranches):
+        if i < len(setup.tranches) - 1:
+            shares_i = int(round(total_shares * t.weight_pct / 100))
+            allocated += shares_i
+        else:
+            shares_i = max(total_shares - allocated, 0)
+        rows.append((t, shares_i))
+
+    total_investment = sum(t.price * n for t, n in rows)
+    total_risk_amount = sum(n * (t.price - setup.stop_loss) for t, n in rows)
+    total_risk_pct_acct = total_risk_amount / account_size * 100 if account_size else 0.0
+    cash_left = account_size - total_investment
+
+    st.markdown(
+        f"<div class='sizing-flow'>3단계에 걸쳐 총 <b>{total_shares:,}주</b>를 나눠 매수하는 계획입니다. "
+        f"모두 체결되면 평단가는 약 <b>{_money_cur(weighted_avg_price, is_kr)}</b>, 총 투입 <b>{_money_cur(total_investment, is_kr)}</b>, "
+        f"손절가 <b>{_money_cur(setup.stop_loss, is_kr)}</b> 기준 총 손실은 <b>{_money_cur(total_risk_amount, is_kr)}</b>"
+        f"(계좌의 {total_risk_pct_acct:.1f}%)입니다.</div>",
+        unsafe_allow_html=True,
+    )
+
+    for t, n in rows:
+        tc1, tc2, tc3, tc4 = st.columns([2.2, 1, 1, 1])
+        tc1.markdown(f"**{t.label}**<br><span style='color:#94a3b8;font-size:.85rem'>{t.note}</span>", unsafe_allow_html=True)
+        tc2.metric("가격", _money_cur(t.price, is_kr))
+        tc3.metric("비중", f"{t.weight_pct:.0f}%")
+        tc4.metric("수량", f"{n:,}주")
+
+    r1, r2 = st.columns(2)
+    r1.metric("허용 손실 금액", _money_cur(adj_risk_amount, is_kr), (f"Risk 배율 {risk.position_size_multiplier:.2f}× 적용" if multiplier_active else f"계좌의 {risk_pct_input:.1f}%"))
+    r2.metric("투입 금액 (전체 체결 시)", _money_cur(total_investment, is_kr), f"계좌의 {total_investment/account_size*100:.1f}% · 잔여 현금 {_money_cur(cash_left, is_kr)}" if account_size else None)
+
+    if total_shares == 0:
+        st.warning("허용 손실 한도로는 1주도 배정할 수 없습니다. 계좌 규모를 늘리거나 손실 허용 비율을 높여보세요.")
+    if capped_by_cash:
+        st.info("리스크 기준 수량이 계좌 현금 한도를 넘어 자동으로 줄였습니다. 이 경우 실제 손실은 목표보다 작아집니다.")
+    if multiplier_active:
+        st.caption(f"현재 Risk 상태({risk_ko(risk.level)})를 반영해 허용 손실 한도를 {_money_cur(base_risk_amount, is_kr)}에서 {_money_cur(adj_risk_amount, is_kr)}로 낮췄습니다.")
+    st.caption(
+        "손절가는 3단계 모두 동일합니다 — 눌림목은 지지 구간 안에서 가격이 더 불리해질 때, 모멘텀은 돌파가 유지되는 것을 "
+        "확인할 때마다 나눠 사는 계획이라, 한 지점에 전량을 거는 것보다 진입가를 분산할 수 있습니다. "
+        "일부 단계만 체결된 상태에서 손절되면 실제 손실은 위 금액보다 작습니다."
+    )
+
+
 def render_position_sizing(setup, symbol: str, risk, title: str):
-    """계좌 규모 · 손실 허용 비율을 입력받아, 위 가격 계획(진입가/손절가)을 기준으로
-    참고용 매수 수량을 계산합니다. 매수 여부나 정확한 수량을 결정해주는 기능이 아니라,
-    '이 손절가 기준으로 얼마나 사는 게 리스크 관리상 합리적인가'를 계산해 보여주는 보조 도구입니다."""
+    """계좌 규모와 계산 방식을 입력받아 참고용 매수 수량을 계산합니다. 매수 여부나 정확한
+    수량을 결정해주는 기능이 아니라 리스크 관리 참고용 계산기이며, 세 가지 계산 방식을
+    제공합니다 — 정밀(손절 거리 기반 %), 간편(계좌 대비 비중), 분할 매수(3단계 진입)."""
     if setup.entry_price is None or setup.stop_loss is None or setup.entry_price <= setup.stop_loss:
         return
     is_kr = market_for_symbol(symbol) == "KR"
@@ -963,11 +1133,16 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
     currency_hint = "원" if is_kr else "달러($)"
     with st.expander(f"🧮 {title} · 포지션 사이징 계산기", expanded=False):
         st.caption(
-            "계좌 규모와 '한 번 진입에서 감수할 최대 손실 비율'을 입력하면, 위 손절가를 기준으로 참고 수량을 계산합니다. "
-            "이 종목을 사라는 뜻이 아니라, 정한 손절가에서 실제로 손절했을 때 계좌 전체 손실을 원하는 비율 이하로 묶기 위한 계산기입니다."
+            "계좌 규모와 계산 방식을 정하면 참고 수량을 계산합니다. 이 종목을 사라는 뜻이 아니라, "
+            "정한 기준으로 계좌 전체 손실·투입 비중을 관리하기 위한 보조 도구입니다."
         )
-        ic1, ic2 = st.columns(2)
-        acct_str = ic1.text_input(
+        mode = st.radio(
+            "계산 방식",
+            ["정밀 모드 · 손절 기준", "간편 모드 · 비중 기준", "분할 매수 모드 · 3단계 진입"],
+            horizontal=True,
+            key=f"sizing_mode_{setup.name}_{symbol}",
+        )
+        acct_str = st.text_input(
             f"계좌 규모 · {currency_hint} (콤마 넣어도 됩니다)", value=f"{default_account:,.0f}",
             key=f"acct_{setup.name}_{symbol}",
         )
@@ -976,65 +1151,20 @@ def render_position_sizing(setup, symbol: str, risk, title: str):
         except ValueError:
             account_size = -1.0
         if account_size < 0:
-            ic1.caption("숫자만 입력해 주세요. 예: 10,000,000")
-        else:
-            ic1.caption(f"입력값 확인 · {_money_cur(account_size, is_kr)}")
-        risk_pct_input = ic2.number_input(
-            "1회 손실 허용 비율 (%)", min_value=0.1, max_value=10.0, value=1.0, step=0.1,
-            key=f"riskpct_{setup.name}_{symbol}",
-        )
-        risk_per_share = setup.entry_price - setup.stop_loss
-        if account_size <= 0 or risk_per_share <= 0:
+            st.caption("숫자만 입력해 주세요. 예: 10,000,000")
+            return
+        st.caption(f"입력값 확인 · {_money_cur(account_size, is_kr)}")
+        if account_size <= 0:
             st.info("계좌 규모를 올바르게 입력해 주세요.")
             return
 
-        base_risk_amount = account_size * risk_pct_input / 100
-        adj_risk_amount = base_risk_amount * risk.position_size_multiplier
-        shares_by_risk = int(adj_risk_amount // risk_per_share)
-        max_affordable_shares = int(account_size // setup.entry_price)
-        capped_by_cash = shares_by_risk > max_affordable_shares
-        shares = min(shares_by_risk, max_affordable_shares)
-        position_value = shares * setup.entry_price
-        actual_risk_amount = shares * risk_per_share
-        position_pct = position_value / account_size * 100 if account_size else 0.0
-        actual_risk_pct = actual_risk_amount / account_size * 100 if account_size else 0.0
-        multiplier_active = risk.position_size_multiplier < 0.999
+        if mode == "정밀 모드 · 손절 기준":
+            _render_sizing_precise(setup, is_kr, account_size, risk)
+        elif mode == "간편 모드 · 비중 기준":
+            _render_sizing_simple(setup, is_kr, account_size)
+        else:
+            _render_sizing_tranches(setup, is_kr, account_size, risk)
 
-        cash_left = account_size - position_value
-        narrative = (
-            f"진입가 <b>{_money_cur(setup.entry_price, is_kr)}</b>에 참고 수량 <b>{shares:,}주</b>를 매수하면 "
-            f"투입 금액은 <b>{_money_cur(position_value, is_kr)}</b>이고, 계좌에는 <b>{_money_cur(cash_left, is_kr)}</b>이 현금으로 남습니다.<br>"
-            f"손절가 <b>{_money_cur(setup.stop_loss, is_kr)}</b>까지 하락해 정리하면, 주당 <b>{_money_cur(risk_per_share, is_kr)}</b>씩(진입가 대비 -{setup.risk_pct:.1f}%) "
-            f"총 <b>{_money_cur(actual_risk_amount, is_kr)}</b>을 잃습니다 — 계좌 전체 기준으로는 <b>{actual_risk_pct:.1f}%</b> 손실입니다."
-        )
-        st.markdown(f"<div class='sizing-flow'>{narrative}</div>", unsafe_allow_html=True)
-
-        r1, r2, r3, r4 = st.columns(4)
-        r1.metric("허용 손실 금액", _money_cur(adj_risk_amount, is_kr), (f"Risk 배율 {risk.position_size_multiplier:.2f}× 적용" if multiplier_active else f"계좌의 {risk_pct_input:.1f}%"))
-        r2.metric("주당 손절 리스크", _money_cur(risk_per_share, is_kr), f"진입가 대비 -{setup.risk_pct:.1f}%" if setup.risk_pct else None)
-        r3.metric("참고 수량", f"{shares:,}주", "현금 한도로 축소됨" if capped_by_cash else None)
-        r4.metric("투입 금액", _money_cur(position_value, is_kr), f"계좌의 {position_pct:.1f}% · 잔여 현금 {_money_cur(cash_left, is_kr)}")
-
-        if shares == 0 and shares_by_risk == 0:
-            st.warning(
-                f"허용 손실 {_money_cur(adj_risk_amount, is_kr)}로는 주당 손절 리스크 {_money_cur(risk_per_share, is_kr)}짜리 1주도 살 수 없어 **참고 수량이 0주**로 나왔습니다. "
-                f"이 종목의 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 넓은 편이라 생기는, 계산상 정상적인 결과입니다(오류 아님). "
-                "계좌 규모를 늘리거나 손실 허용 비율을 높이면 1주부터 계산되기 시작하고, 반대로 이 손절 거리 자체가 부담스럽다면 이 셋업은 지금 비중 관리 기준으로는 맞지 않는 것으로 볼 수 있습니다."
-            )
-        elif position_pct >= 70:
-            st.warning(
-                f"투입 금액이 계좌의 {position_pct:.0f}%로 큽니다. 손절 거리가 진입가 대비 -{setup.risk_pct:.1f}%로 좁다 보니, "
-                "적은 손실 허용 비율로도 많은 수량 계산이 나온 것뿐이에요. **'손실 허용 비율'과 '투입 비중'은 다른 개념**입니다 — "
-                "손실 허용 비율은 '손절될 때 잃는 돈', 투입 비중은 '지금 이 종목에 묶이는 돈'입니다. "
-                "한 종목에 계좌를 너무 몰아넣고 싶지 않다면, 투입 비중에 별도 상한(예: 계좌의 20~30%)을 스스로 정해서 수량을 줄이는 것도 방법입니다."
-            )
-        if capped_by_cash:
-            st.info(
-                f"손실 허용 비율 기준으로는 {shares_by_risk:,}주가 필요하지만, 입력한 계좌 규모로는 최대 {max_affordable_shares:,}주까지만 살 수 있어 그만큼으로 제한했습니다. "
-                f"이 경우 실제 손절 시 손실은 목표보다 작은 {_money_cur(actual_risk_amount, is_kr)}(계좌의 {actual_risk_pct:.1f}%)입니다."
-            )
-        if multiplier_active:
-            st.caption(f"기본 허용 손실 한도 {_money_cur(base_risk_amount, is_kr)} 중, 현재 Risk 상태({risk_ko(risk.level)})를 반영해 {_money_cur(adj_risk_amount, is_kr)}까지만 쓰도록 자동으로 낮췄습니다.")
         st.caption("실제 매수 여부·수량·분할 진입 방식은 본인 판단과 계좌 규정에 따라 결정하세요. 세금·수수료·슬리피지는 반영되지 않았습니다.")
 
 

@@ -69,6 +69,19 @@ class PriceZone:
 
 
 @dataclass(frozen=True)
+class EntryTranche:
+    """One step of a scaled (multi-step) entry plan.
+
+    weight_pct values across a setup's tranches sum to 100 and represent the
+    share of the final position added at that price level, not a probability.
+    """
+    label: str
+    price: float
+    weight_pct: float
+    note: str
+
+
+@dataclass(frozen=True)
 class SetupScore:
     name: str
     score: float
@@ -85,6 +98,7 @@ class SetupScore:
     risk_reward1: float | None = None
     risk_reward2: float | None = None
     risk_pct: float | None = None
+    tranches: tuple[EntryTranche, ...] = ()
 
 
 @dataclass(frozen=True)
