@@ -3,6 +3,14 @@ from __future__ import annotations
 from core_models import MarketRegimeSnapshot, RiskSnapshot, TechnicalSnapshot
 from scoring_utils import clip, scale, weighted
 
+# tech.dollar_volume is (close * volume) in the stock's own quote currency —
+# for KR symbols that's KRW, not USD. The liquidity thresholds below are tuned
+# in USD magnitude, so a KRW figure must be converted first or almost every
+# KOSPI/KOSDAQ stock clears the "High" bucket purely from the ~1,000x smaller
+# denomination of the won, regardless of how thin it actually trades.
+# This is a rough, static approximation for bucketing only — not a live FX rate.
+_KRW_PER_USD_APPROX = 1_350.0
+
 
 def build_risk_snapshot(tech: TechnicalSnapshot, market: MarketRegimeSnapshot, earnings_days: int | None = None) -> RiskSnapshot:
     ext_metric = max(tech.dist_ema20_atr, 0) + max(tech.rsi - 70, 0) / 8
@@ -23,11 +31,13 @@ def build_risk_snapshot(tech: TechnicalSnapshot, market: MarketRegimeSnapshot, e
     else:
         earnings_risk = 20.0; earnings = f"Normal · D-{earnings_days}"
 
-    if tech.dollar_volume >= 100_000_000:
+    is_kr = market.market == "KR"
+    usd_equiv_volume = tech.dollar_volume / _KRW_PER_USD_APPROX if is_kr else tech.dollar_volume
+    if usd_equiv_volume >= 100_000_000:
         liquidity_risk, liquidity = 10.0, "High"
-    elif tech.dollar_volume >= 20_000_000:
+    elif usd_equiv_volume >= 20_000_000:
         liquidity_risk, liquidity = 25.0, "Normal"
-    elif tech.dollar_volume >= 5_000_000:
+    elif usd_equiv_volume >= 5_000_000:
         liquidity_risk, liquidity = 50.0, "Thin"
     else:
         liquidity_risk, liquidity = 78.0, "Weak"
@@ -43,7 +53,10 @@ def build_risk_snapshot(tech: TechnicalSnapshot, market: MarketRegimeSnapshot, e
         "Extension": f"EMA20 대비 {tech.dist_ema20_atr:+.2f} ATR · RSI {tech.rsi:.1f}",
         "Volatility": f"ATR {tech.atr_pct:.2f}%",
         "Earnings": earnings,
-        "Liquidity": f"20일 평균 거래대금 약 {tech.dollar_volume:,.0f}",
+        "Liquidity": (
+            f"20일 평균 거래대금 약 {tech.dollar_volume:,.0f}원 (~${usd_equiv_volume:,.0f} 환산, 근사 환율 적용)"
+            if is_kr else f"20일 평균 거래대금 약 ${tech.dollar_volume:,.0f}"
+        ),
         "Market": f"{market.market} Regime {market.label} · {market.score:.1f}",
     }
     return RiskSnapshot(round(clip(score), 1), level, extension, volatility, earnings, liquidity, market_state, multiplier, details)

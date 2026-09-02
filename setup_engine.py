@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from core_models import EntryTranche, MarketRegimeSnapshot, RiskSnapshot, SetupScore, SetupSnapshot, TechnicalSnapshot
+from core_models import MarketRegimeSnapshot, RiskSnapshot, SetupScore, SetupSnapshot, TechnicalSnapshot
 from scoring_utils import clip, scale, weighted
 from sr_engine import ZoneSet
 
@@ -11,33 +11,6 @@ def _nearest_support(zones: ZoneSet):
 
 def _nearest_resistance(zones: ZoneSet):
     return zones.resistances[0] if zones.resistances else None
-
-
-def _pullback_tranches(support, entry_ref: float, atr: float) -> tuple[EntryTranche, ...]:
-    """Ladder INTO a defined support zone (top -> bottom), all sharing the same
-    stop below the zone. This is not 'average down indefinitely' — it is
-    bounded by the zone's own invalidation level, so buying lower within the
-    zone means a better price against the same stop, not a widening risk."""
-    if support:
-        upper, mid, lower = support.high, support.center, support.low
-    else:
-        upper, mid, lower = entry_ref + atr * 0.3, entry_ref, entry_ref - atr * 0.3
-    return (
-        EntryTranche("1차 진입", round(upper, 4), 40.0, "지지 구간 상단에 처음 진입"),
-        EntryTranche("2차 진입", round(mid, 4), 30.0, "지지 구간 중심까지 눌릴 때 추가"),
-        EntryTranche("3차 진입", round(lower, 4), 30.0, "지지 구간 하단까지 눌렸을 때 마지막 물량 추가"),
-    )
-
-
-def _momentum_tranches(trigger: float, atr: float) -> tuple[EntryTranche, ...]:
-    """Pyramid UP as a breakout proves itself, rather than committing full size
-    at the first tick above the trigger."""
-    t1, t2, t3 = trigger, trigger + atr * 0.6, trigger + atr * 1.4
-    return (
-        EntryTranche("1차 진입", round(t1, 4), 40.0, "돌파 트리거 가격에 최초 진입"),
-        EntryTranche("2차 진입", round(t2, 4), 30.0, "돌파 이후 상승이 유지되는지 확인하며 추가"),
-        EntryTranche("3차 진입", round(t3, 4), 30.0, "후속 상승이 이어질 때 마지막 물량 추가"),
-    )
 
 
 def _targets_from_resistance(entry_ref: float, zones: ZoneSet, atr: float, mult1: float, mult2: float) -> tuple[float, float]:
@@ -181,8 +154,7 @@ def build_setups(now: float, tech: TechnicalSnapshot, market: MarketRegimeSnapsh
                       target1=round(pull_target1, 4), target2=round(pull_target2, 4),
                       risk_reward1=_risk_reward(pull_entry_ref, invalidation, pull_target1),
                       risk_reward2=_risk_reward(pull_entry_ref, invalidation, pull_target2),
-                      risk_pct=round(pull_risk_pct, 2) if pull_risk_pct is not None else None,
-                      tranches=_pullback_tranches(support, pull_entry_ref, tech.atr))
+                      risk_pct=round(pull_risk_pct, 2) if pull_risk_pct is not None else None)
 
     mom_entry_ref = max(now, trigger)
     mom_target1, mom_target2 = _targets_from_resistance(mom_entry_ref, zones, tech.atr, 2.5, 4.2)
@@ -194,8 +166,7 @@ def build_setups(now: float, tech: TechnicalSnapshot, market: MarketRegimeSnapsh
                           target1=round(mom_target1, 4), target2=round(mom_target2, 4),
                           risk_reward1=_risk_reward(mom_entry_ref, mom_invalidation, mom_target1),
                           risk_reward2=_risk_reward(mom_entry_ref, mom_invalidation, mom_target2),
-                          risk_pct=round(mom_risk_pct, 2) if mom_risk_pct is not None else None,
-                          tranches=_momentum_tranches(trigger, tech.atr))
+                          risk_pct=round(mom_risk_pct, 2) if mom_risk_pct is not None else None)
 
     actionable_pull = pull.status in ("READY", "DEVELOPING") and pull.score >= 62
     actionable_mom = momentum.status in ("CONFIRMED", "EARLY BREAKOUT", "EXTENDED") and momentum.score >= 62

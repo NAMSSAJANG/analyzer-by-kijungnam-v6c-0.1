@@ -9,6 +9,18 @@ from core_models import CompanySnapshot, MarketRegimeSnapshot, PriceZone, Techni
 from scoring_utils import clip, finite, scale, weighted
 
 
+def quant_composite_score(company_score: float | None, trend: float, momentum: float, demand: float, relative_strength: float) -> float:
+    """Quant Composite 산식. build_quant_snapshot과 피어 백분위 계산이 동일한 산식을
+    쓰도록 별도 함수로 분리했습니다 (두 곳에서 가중치가 어긋나지 않도록)."""
+    return weighted([
+        (company_score, .35),
+        (trend, .25),
+        (momentum, .15),
+        (demand, .10),
+        (relative_strength, .15),
+    ])
+
+
 def build_quant_snapshot(
     frame: pd.DataFrame,
     company: CompanySnapshot,
@@ -22,13 +34,7 @@ def build_quant_snapshot(
     Quant Composite intentionally excludes Market Regime from its score so it does
     not duplicate Opportunity. Market is shown as a separate CAN SLIM/context lens.
     """
-    quant_score = weighted([
-        (company.score, .35),
-        (tech.trend, .25),
-        (tech.momentum, .15),
-        (tech.demand, .10),
-        (tech.relative_strength, .15),
-    ])
+    quant_score = quant_composite_score(company.score, tech.trend, tech.momentum, tech.demand, tech.relative_strength)
 
     d = frame.dropna(subset=["Close"]).copy()
     c = d["Close"].astype(float)

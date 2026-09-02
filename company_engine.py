@@ -20,6 +20,13 @@ def _num(info: Mapping, key: str) -> float | None:
     return float(value) if finite(value) else None
 
 
+def _positive_multiple(value: float | None) -> float | None:
+    """PER/PBR류 valuation multiple 전용 가드. 적자기업의 음수 PER(예: -20)이나
+    자본잠식으로 인한 음수 PBR은 '매우 저평가'가 아니라 '이 지표로 평가 불가' 상태이므로,
+    reverse-scale에 흘려보내면 안 됩니다(음수일수록 score가 100에 가까워지는 착시가 생김)."""
+    return value if value is not None and value > 0 else None
+
+
 def extract_company_raw(info: Mapping) -> dict[str, float | None]:
     revenue = _num(info, "totalRevenue")
     free_cash_flow = _num(info, "freeCashflow")
@@ -56,10 +63,10 @@ def _absolute_scores(raw: Mapping[str, float | None]) -> dict[str, float | None]
         ]) if any(finite(raw.get(k)) for k in ("debt_to_equity", "current_ratio")) else None,
         "Cash Flow": scale(raw.get("fcf_margin"), -5, 22) if finite(raw.get("fcf_margin")) else None,
         "Valuation": weighted([
-            (scale(raw.get("forward_pe"), 8, 45, reverse=True) if finite(raw.get("forward_pe")) else None, .45),
-            (scale(raw.get("trailing_pe"), 8, 50, reverse=True) if finite(raw.get("trailing_pe")) else None, .35),
-            (scale(raw.get("price_to_book"), 1, 12, reverse=True) if finite(raw.get("price_to_book")) else None, .20),
-        ]) if any(finite(raw.get(k)) for k in ("forward_pe", "trailing_pe", "price_to_book")) else None,
+            (scale(_positive_multiple(raw.get("forward_pe")), 8, 45, reverse=True) if _positive_multiple(raw.get("forward_pe")) else None, .45),
+            (scale(_positive_multiple(raw.get("trailing_pe")), 8, 50, reverse=True) if _positive_multiple(raw.get("trailing_pe")) else None, .35),
+            (scale(_positive_multiple(raw.get("price_to_book")), 1, 12, reverse=True) if _positive_multiple(raw.get("price_to_book")) else None, .20),
+        ]) if any(_positive_multiple(raw.get(k)) for k in ("forward_pe", "trailing_pe", "price_to_book")) else None,
     }
 
 
@@ -79,13 +86,19 @@ def _peer_relative(raw: Mapping[str, float | None], peer_raw: Sequence[Mapping[s
         "trailing_pe": "Trailing PE",
         "price_to_book": "Price / Book",
     }
+    valuation_keys = {"forward_pe", "trailing_pe", "price_to_book"}
     out: dict[str, float | None] = {}
     for key, label in higher_better.items():
         vals = [x.get(key) for x in peer_raw if finite(x.get(key))]
         out[label] = percentile_score(raw.get(key), vals)
     for key, label in lower_better.items():
-        vals = [x.get(key) for x in peer_raw if finite(x.get(key))]
-        pct = percentile_score(raw.get(key), vals)
+        is_valuation = key in valuation_keys
+        target = _positive_multiple(raw.get(key)) if is_valuation else raw.get(key)
+        vals = [
+            (_positive_multiple(x.get(key)) if is_valuation else x.get(key)) for x in peer_raw
+        ]
+        vals = [v for v in vals if finite(v)]
+        pct = percentile_score(target, vals)
         out[label] = None if pct is None else 100 - pct
     return out
 
