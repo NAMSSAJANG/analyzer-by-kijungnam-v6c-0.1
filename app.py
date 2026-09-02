@@ -1939,7 +1939,7 @@ def render_treemap(names: list[str], tickers: list[str], key: str, height: int =
         valid = [c for c in caps if c]
         if len(valid) >= max(2, len(tickers) // 2):
             fallback = sorted(valid)[len(valid) // 2]
-            sizes = [c if c else fallback for c in caps]
+            sizes = [(c if c else fallback) ** 0.5 for c in caps]
         else:
             sizes = [max(abs(ch), 0.35) for ch in changes]
     else:
@@ -1962,10 +1962,9 @@ def render_treemap(names: list[str], tickers: list[str], key: str, height: int =
 def render_grouped_treemap(groups: dict[str, list[str]], key: str, height: int = 480):
     """Nested treemap: category tiles containing individual ticker tiles,
     mirroring a Finviz-style grouped heatmap (text-only; no logo icons).
-    타일 크기는 시가총액 기준입니다(대형주일수록 큰 타일) — 이전에는 당일 등락폭 크기로
-    잘못 배분되어, 그날 변동이 작았던 대형주(예: META, JPM)가 실제 비중과 무관하게
-    거의 안 보이는 크기로 나오는 문제가 있었습니다. 시가총액을 가져오지 못한 종목은
-    같은 카테고리 안의 중앙값으로 대체합니다."""
+    타일 크기는 시가총액의 제곱근 기준입니다(대형주일수록 큰 타일이지만, 초대형주와
+    대형주 간 격차를 완화해 QCOM/PLTR 같은 종목이 점처럼 눌리지 않게 합니다).
+    시가총액을 가져오지 못한 종목은 같은 카테고리 안의 중앙값으로 대체합니다."""
     all_tickers = [t for lst in groups.values() for t in lst]
     change_map = dict(zip(all_tickers, _pct_changes(all_tickers)))
     cap_map = dict(zip(all_tickers, _market_caps(all_tickers)))
@@ -1975,7 +1974,7 @@ def render_grouped_treemap(groups: dict[str, list[str]], key: str, height: int =
         cat_avg = sum(cat_changes) / len(cat_changes) if cat_changes else 0.0
         cat_caps_valid = [cap_map.get(t) for t in tickers if cap_map.get(t)]
         fallback_cap = sorted(cat_caps_valid)[len(cat_caps_valid) // 2] if cat_caps_valid else 1.0
-        cat_sizes = [cap_map.get(t) or fallback_cap for t in tickers]
+        cat_sizes = [(cap_map.get(t) or fallback_cap) ** 0.5 for t in tickers]
         ids.append(cat)
         labels.append(f"{cat}  {cat_avg:+.2f}%  ·  {len(tickers)}종목")
         parents.append("")
@@ -2098,7 +2097,7 @@ def render_nasdaq100_marketcap_map():
         fig = go.Figure(go.Treemap(
             labels=[f"{s}<br>{c:+.2f}%" for s, c in zip(df.Symbol, df.Change)],
             parents=[""] * len(df),
-            values=df.MarketCap.clip(lower=0.01),
+            values=df.MarketCap.clip(lower=0.01) ** 0.5,
             marker=dict(colors=df.Change, colorscale=[[0, "#7f1d3a"], [0.5, "#16232f"], [1, "#0f6b4a"]], cmid=0, showscale=False, line=dict(width=1, color="#07111f")),
             textinfo="label", textfont=dict(size=11, color="#f8fafc"),
         ))
@@ -2155,13 +2154,13 @@ def render_nasdaq100_sector_map():
         ids.append(sector)
         labels.append(f"{sector}  {cat_avg:+.2f}%  ·  {len(sub)}종목")
         parents.append("")
-        values.append(cap_sum)
+        values.append(cap_sum ** 0.5)
         colors.append(cat_avg)
         for row in sub.itertuples():
             ids.append(f"{sector}|{row.Symbol}")
             labels.append(f"{row.Symbol}<br>{row.Change:+.2f}%")
             parents.append(sector)
-            values.append(max(float(row.MarketCap), 0.01))
+            values.append(max(float(row.MarketCap), 0.01) ** 0.5)
             colors.append(float(row.Change))
     try:
         fig = go.Figure(go.Treemap(
