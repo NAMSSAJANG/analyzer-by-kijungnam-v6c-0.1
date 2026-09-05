@@ -15,7 +15,13 @@ HORIZONS = (5, 10, 20, 60)
 PRIMARY_HORIZON = 20
 MAX_CALIBRATION_WINDOW = 420
 MIN_TECH_HISTORY = 230
-CALIBRATION_LOGIC_VERSION = "v614"
+CALIBRATION_LOGIC_VERSION = "v615"
+
+
+def close_drawdown(prices) -> float:
+    """Peak-to-trough drawdown in percent, including the entry close."""
+    values = pd.Series(prices, dtype=float)
+    return float((values / values.cummax() - 1).min() * 100)
 
 
 def _episode_metadata(mask: pd.Series, reset_days: int = EPISODE_RESET_DAYS) -> tuple[np.ndarray, np.ndarray]:
@@ -148,7 +154,7 @@ def run_setup_calibration(
 
         if i + PRIMARY_HORIZON < len(d):
             future20 = d["Close"].iloc[i + 1 : i + PRIMARY_HORIZON + 1].astype(float)
-            mdd20 = ((future20 / now) - 1).min() * 100 if len(future20) == PRIMARY_HORIZON else np.nan
+            mdd20 = close_drawdown([now, *future20]) if len(future20) == PRIMARY_HORIZON else np.nan
         else:
             mdd20 = np.nan
 

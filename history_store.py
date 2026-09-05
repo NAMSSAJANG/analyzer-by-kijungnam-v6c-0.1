@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -29,8 +30,14 @@ class SQLiteHistoryStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._init()
 
+    @contextmanager
     def _connect(self):
-        return sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path)
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
 
     def _init(self):
         with self._connect() as con:

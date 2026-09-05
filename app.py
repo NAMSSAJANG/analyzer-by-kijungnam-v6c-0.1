@@ -15,7 +15,7 @@ import streamlit as st
 import yfinance as yf
 from plotly.subplots import make_subplots
 
-from calibration_engine import HORIZONS, MAX_CALIBRATION_WINDOW, MIN_TECH_HISTORY, run_setup_calibration
+from calibration_engine import CALIBRATION_LOGIC_VERSION, HORIZONS, MAX_CALIBRATION_WINDOW, MIN_TECH_HISTORY, run_setup_calibration
 from company_engine import build_company_snapshot
 from consensus_engine import build_consensus_v2
 from history_store import SQLiteHistoryStore
@@ -1409,7 +1409,7 @@ def cached_calibration_view(symbol: str, a: dict) -> dict:
     thresholds = list(dict.fromkeys(thresholds))
     result = None; used_threshold = None
     for threshold in thresholds:
-        for prefix in ("calibration_result_v612", "calibration_result_v611", "calibration_result_v609"):
+        for prefix in (f"calibration_result_{CALIBRATION_LOGIC_VERSION}",):
             key = f"{prefix}_{symbol}_{threshold}"
             if key in st.session_state:
                 result = st.session_state[key]; used_threshold = threshold; break
@@ -2744,7 +2744,7 @@ def render_calibration(a: dict, symbol: str):
         """)
 
     run = st.button("과거 진입 검증 실행", type="primary")
-    cache_key = f"calibration_result_v614_{symbol}_{threshold}"
+    cache_key = f"calibration_result_{CALIBRATION_LOGIC_VERSION}_{symbol}_{threshold}"
     if run:
         try:
             with st.spinner("과거 각 거래일의 눌림목·모멘텀 Setup을 재구성하는 중입니다..."):
@@ -2948,7 +2948,7 @@ def render_calibration(a: dict, symbol: str):
 - **20일 후 상승 비율**: 20D 검증 사례 중 각 검증 기준일 종가보다 20영업일 뒤 종가가 높았던 비율입니다. 미래 상승확률을 뜻하지 않습니다.
 - **대표 수익률 (Median)**: 20D 검증 사례들의 수익률을 순서대로 세웠을 때 가운데 값입니다. 몇 번의 큰 급등·급락 영향이 적어 **'보통 사례가 어느 정도였는가'**를 볼 때 유용합니다.
 - **평균 수익률 (Average)**: 모든 20D 검증 사례의 수익률을 더해 나눈 값입니다. 큰 급등 한두 번이 있으면 대표 수익률보다 높아질 수 있습니다.
-- **평균 최대 하락폭 (MDD20)**: 진입 후 20영업일 동안 중간에 얼마나 크게 밀렸는지를 평균낸 값입니다. 0에 가까울수록 진입 후 흔들림이 작았다는 뜻입니다.
+- **평균 최대 하락폭 (MDD20)**: 기준일 종가를 포함한 이후 20영업일의 종가 경로에서, 이전 최고 종가 대비 최대 하락률을 계산한 뒤 사례별로 평균낸 값입니다. 일중 저가는 포함하지 않습니다.
 - **평균 60D**: 60D 전용 기준일을 최소 60거래일 간격으로 따로 추려 계산합니다. 진입 직후 정확도보다는 이후 추세 지속성을 보는 장기 참고값입니다.
         """)
         if (summary["Validation 20D"] < 5).any():
@@ -2991,7 +2991,7 @@ def render_calibration(a: dict, symbol: str):
 
 # -------------------- App shell --------------------
 st.title("Stock Analyzer by Kijungnam")
-st.caption("V6.0.22 · MULTI-LENS SETUP & DECISION SYSTEM · Scanner → Decision Dashboard → Deep Analysis")
+st.caption("v6_A_0.1 · MULTI-LENS SETUP & DECISION SYSTEM · Trade Lab")
 
 with st.expander("🔥 V6 종목 스캐너 · 시장 전체 후보 찾기", expanded=False):
     render_scanner_section()
@@ -3014,7 +3014,7 @@ st.markdown("<div class='v6-section'></div>", unsafe_allow_html=True)
 st.caption("통합 판단에서 전체 상태를 먼저 보고, 궁금한 근거만 아래 상세 분석으로 내려가는 구조입니다.")
 mode=st.radio(
     "개별 분석 메뉴",
-    ["🧭 V6 통합 판단","📊 핵심 분석","🎯 퀀트 분석","🧩 옵션 분석","🌎 시장 환경","🧪 과거 진입 검증","💾 History"],
+    ["🧭 V6 통합 판단","📊 핵심 분석","🎯 퀀트 분석","🧩 옵션 분석","🌎 시장 환경","🧪 과거 진입 검증","🧮 Trade Lab","💾 History"],
     horizontal=True,label_visibility="collapsed"
 )
 st.divider()
@@ -3056,6 +3056,10 @@ elif mode=="🌎 시장 환경": render_market_dashboard()
 elif mode=="🧪 과거 진입 검증":
     if not symbol or not analysis: st.info("먼저 종목을 검색한 뒤 과거 진입 검증을 실행해 주세요.")
     else: render_calibration(analysis,symbol)
+
+elif mode=="🧮 Trade Lab":
+    from trade_lab import render_trade_lab
+    render_trade_lab()
 
 elif mode=="💾 History":
     st.header("V6 History Database")

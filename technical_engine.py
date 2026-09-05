@@ -11,7 +11,9 @@ def _rsi(close: pd.Series, n: int = 14) -> pd.Series:
     delta = close.diff()
     up = delta.clip(lower=0).ewm(alpha=1 / n, adjust=False).mean()
     down = -delta.clip(upper=0).ewm(alpha=1 / n, adjust=False).mean()
-    return 100 - 100 / (1 + up / down.replace(0, np.nan))
+    result = 100 - 100 / (1 + up / down.replace(0, np.nan))
+    result = result.mask((down == 0) & (up > 0), 100.0)
+    return result.mask((down == 0) & (up == 0), 50.0)
 
 
 def _adx(frame: pd.DataFrame, n: int = 14) -> tuple[pd.Series, pd.Series]:
